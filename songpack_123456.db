@@ -1,0 +1,283 @@
+diff --git a/magicball/BallViewController.h b/magicball/BallViewController.h
+index 036bfd9..e6ba203 100644
+--- a/magicball/BallViewController.h
++++ b/magicball/BallViewController.h
+@@ -17,7 +17,5 @@
+ @interface BallViewController : UIViewController
+ 
+ - (id)initWithNibName:(NSString *)nibNameOrNil bundle:(NSBundle *)nibBundleOrNil;
+-+ (CLLocationCoordinate2D) getLocation;
+-
+ 
+ @end
+diff --git a/magicball/BallViewController.m b/magicball/BallViewController.m
+index b769776..5c817d4 100644
+--- a/magicball/BallViewController.m
++++ b/magicball/BallViewController.m
+@@ -38,6 +38,7 @@ typedef enum {
+ } UI_STATE;
+ 
+ @interface BallViewController ()  <
++    CLLocationManagerDelegate,
+     MKMapViewDelegate,
+     SelfieBallManagerDelegate,
+     PBJVisionDelegate,
+@@ -102,29 +103,35 @@ typedef enum {
+ 
+ @implementation BallViewController
+ 
++#if 1 // use mapkit position, seems core location is not accurate
+ 
+-// location
+-CLLocationCoordinate2D  curLocation;
+-+(CLLocationCoordinate2D) getLocation
++CLLocation * curLocation;
++MKMapView * viewMap;
++CLLocationManager * locationManager;
++
++-(void)saveMapAnnotation
+ {
+-    return curLocation;
++    MapAnnotationMgr * mgr = [[MapAnnotationMgr alloc] init];
++    [mgr addOneAnnotation:MAP_ANN_TYPE_DISCONNECTED inLocation:curLocation];
+ }
+-#if 0 // use mapkit position, seems core location is not accurate
+-CLLocationManager *     locationManager;
+-//获得自己的当前的位置信息
+-- (void) getCurPosition
++
++-(void)mapPositionTimedout
+ {
+-	//开始探测自己的位置
+-	if (locationManager==nil)
+-	{
++    if (curLocation != nil)
++        return;
++    /* stop */
++    viewMap.showsUserLocation = NO;
++    viewMap.delegate = nil;
++    viewMap = nil;
++    /* try GPS */
++    if (locationManager==nil) {
+ 		locationManager =[[CLLocationManager alloc] init];
+ 	}
+ 	
+-	if ([CLLocationManager locationServicesEnabled])
+-	{
++	if ([CLLocationManager locationServicesEnabled]) {
+         NSLog(@"startUpdateLocation");
+ 		locationManager.delegate=self;
+-		locationManager.desiredAccuracy=kCLLocationAccuracyBestForNavigation;
++		locationManager.desiredAccuracy=kCLLocationAccuracyBest;
+ 		locationManager.distanceFilter=10.0f;
+ 		[locationManager startUpdatingLocation];
+ 	}
+@@ -146,8 +153,12 @@ CLLocationManager *     locationManager;
+         NSLog(@"V-Accuracy: %f", location.verticalAccuracy);
+         
+         //保存新位置
+-        curLocation=location.coordinate;
++        curLocation=location;
++        // stop locating
+         [locationManager stopUpdatingLocation];
++        locationManager = nil;
++        // save annotation
++        [self saveMapAnnotation];
+     }
+     else
+         NSLog(@"H:%+.6f(%f) V:%+.6f(%f) t:%f\n",
+@@ -155,30 +166,28 @@ CLLocationManager *     locationManager;
+               location.coordinate.longitude, location.verticalAccuracy, howRecent);
+ }
+ 
+-#else
+-
+-MKMapView * viewMap;
+ - (void) getCurPosition
+ {
+     NSLog(@"getCurPosition");
++    curLocation = nil;
+     if (viewMap == nil) {
+         viewMap = [[MKMapView alloc] initWithFrame:self.view.bounds];
+         viewMap.mapType = MKMapTypeStandard;
+         viewMap.showsUserLocation=YES;
+         viewMap.delegate = self;
++        [self performSelector:@selector(mapPositionTimedout) withObject:nil afterDelay:10];
+     }
+ }
+ -(void)mapView:(MKMapView *)mapView didUpdateUserLocation:(MKUserLocation *)userLocation
+ {
+     NSLog(@"mapview location: %f %f", userLocation.location.coordinate.latitude, userLocation.location.coordinate.longitude);
+-    curLocation = userLocation.location.coordinate;
++    curLocation = userLocation.location;
+     /* stop */
+     viewMap.showsUserLocation = NO;
+     viewMap.delegate = nil;
+     viewMap = nil;
+     // save
+-    MapAnnotationMgr * mgr = [[MapAnnotationMgr alloc] init];
+-    [mgr addOneAnnotation:MAP_ANN_TYPE_DISCONNECTED inLocation:userLocation.location];
++    [self saveMapAnnotation];
+ }
+ #endif
+ 
+diff --git a/magicball/SettingsViewController.m b/magicball/SettingsViewController.m
+index 6a28757..88d525f 100644
+--- a/magicball/SettingsViewController.m
++++ b/magicball/SettingsViewController.m
+@@ -15,10 +15,11 @@
+ #import "MapAnnotation.h"
+ #import "MapAnnotationMgr.h"
+ 
+-@interface SettingsViewController () <MKMapViewDelegate>
++@interface SettingsViewController () <MKMapViewDelegate, UIAlertViewDelegate>
+ {
+     CFURLRef        soundFileURLRef;
+     SystemSoundID   soundFileObject;
++    MapAnnotation * annToDelete;
+ }
+ @property (weak, nonatomic) IBOutlet MKMapView *viewMap;
+ 
+@@ -33,61 +34,33 @@
+ @synthesize soundFileURLRef;
+ @synthesize soundFileObject;
+ 
+-- (void)test
+-{
+-    //AudioServicesPlayAlertSound (soundFileObject);
+-
+-    CLLocationCoordinate2D myLocation = [BallViewController getLocation];
+-
+-    //设置显示区域
+-    MKCoordinateRegion region=MKCoordinateRegionMakeWithDistance(myLocation,1000 ,1000 );
+-    [_viewMap setRegion:region animated:TRUE];
+-    //[_viewMap setMapType:MKMapTypeHybrid];
+-    [_viewMap setDelegate:self];
+-    //标注用户
+-    CLLocationCoordinate2D   userLocation = myLocation;
+-    MapAnnotation *  annotation=[[MapAnnotation alloc] initWithCoordinate:userLocation];
+-    annotation.title=@"小A";
+-    annotation.subtitle=@"20岁";
+-    [_viewMap addAnnotation:annotation];
+-    // 22.549129 113.944643
+-    // 22.531504 113.947712
+-}
+ -(void)mapView:(MKMapView *)mapView didUpdateUserLocation:(MKUserLocation *)userLocation
+ {
+     NSLog(@"mapview location 2: %f %f", userLocation.location.coordinate.latitude, userLocation.location.coordinate.longitude);
+ }
+-//delegate   MKMapViewDelegate
++
++//delegate MKMapViewDelegate
+ - (MKAnnotationView *) mapView:(MKMapView *)mapView viewForAnnotation:(id<MKAnnotation>)annotation
+ {
+-    NSLog(@"viewForAnnotation");
+ 	//判断是否是自己
+     if ([annotation isKindOfClass:[MapAnnotation class]]==YES)
+ 	{
+ 		MKAnnotationView *  view;
+-        NSLog(@"it's me");
+ 		view=(MKAnnotationView *) [mapView  dequeueReusableAnnotationViewWithIdentifier:annotation.title];
+ 		
+-		
+-		if (view==nil)
+-		{
++		if (view==nil) {
+ 			view=[[MKAnnotationView  alloc] initWithAnnotation:annotation reuseIdentifier:annotation.title];
+-            NSLog(@"view nil");
+ 		}
+-		else
+-		{
+-            NSLog(@"view not nil");
++		else {
+ 			view.annotation = annotation;
+ 		}
+ 		
+ 		//设置图标
+-         [view   setImage:[UIImage  imageNamed:@"baritem_locate"] ];
++        [view setImage:[UIImage imageNamed:@"baritem_locate"] ];
+ 		view.canShowCallout=TRUE;
+-		return   view;
++		return view;
+ 	}
+-	else
+-	{
+-        NSLog(@"not me!");
++	else {
+ 		return  nil;
+ 	}
+ }
+@@ -95,10 +68,7 @@
+ //当用户点击小人图标的时候，就进入这里，即将显示 AnnotationView
+ - (void)mapView:(MKMapView *)mapView didSelectAnnotationView:(MKAnnotationView *)view
+ {
+-	
+-    NSLog(@"didSelectAnnotationView");
+-	if ([view.annotation isKindOfClass:[MapAnnotation class]]==NO)
+-	{
++    if ([view.annotation isKindOfClass:[MapAnnotation class]]==NO) {
+ 		return  ;
+ 	}
+ 	
+@@ -111,33 +81,47 @@
+ //    [headImageView    setImage:[UIImage  imageNamed:@"bar_rowa.png"] ];
+ }
+ 
+-- (void) mapView:(MKMapView *)mapView   didAddAnnotationViews:(NSArray*) views
++- (void) mapView:(MKMapView *)mapView didAddAnnotationViews:(NSArray*) views
+ {
+-	int   i=0;
+-	for (MKPinAnnotationView     *mkview   in   views     )
+-	{
++	int i=0;
++	for (MKPinAnnotationView *mkview in views) {
+ 		//判断是否是自己
+-		if ([mkview.annotation isKindOfClass:[MapAnnotation class]]==NO)
+-		{
++		if ([mkview.annotation isKindOfClass:[MapAnnotation class]]==NO) {
+ 			continue;
+ 		}
+-		else
+-		{
+-            UIImageView   *  headImageView=[[UIImageView  alloc] initWithImage:[UIImage   imageNamed:@"baritem_photo"] ];
+-            [headImageView  setFrame:CGRectMake(1, 1, 30, 32)];
+-            mkview.leftCalloutAccessoryView=headImageView;
++		else {
++            UIButton * button=[UIButton  buttonWithType:UIButtonTypeCustom];
++            [button setFrame:CGRectMake(1, 1, 30, 32)];
++            [button setImage:[UIImage imageNamed:@"baritem_photo"] forState:UIControlStateNormal];
++            mkview.leftCalloutAccessoryView = button;
+         }
+ 		i++;
+ 	}
+ }
+ 
++- (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex
++{
++    if (buttonIndex == 0) {
++        // button OK
++        MapAnnotationMgr * mgr = [[MapAnnotationMgr alloc] init];
++        [mgr delOneAnnotation:annToDelete.title];
++    }
++    //[annToDelete removeFromSuperview];
++    [_viewMap removeAnnotation:annToDelete] ;
++    annToDelete = nil;
++}
+ -(void) mapView:(MKMapView *)mapView annotationView:(MKAnnotationView *)view  calloutAccessoryControlTapped:(UIControl *) control
+ {
+ 	MapAnnotation * annotation= view.annotation;
+-    
+-    // 根据 MapAnnotation,取出个性化的个人信息，然后创建自己
+-    // 的新的VIEW,并且显示。
++
+     NSLog(@"annotationView: %@", annotation.title);
++    annToDelete = view.annotation;
++    UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Test Message"
++                                                    message:@"This is a test"
++                                                   delegate:self
++                                          cancelButtonTitle:@"YES"
++                                          otherButtonTitles:@"NO", nil];
++    [alert show];
+ }
+ 
+ -(void)returnToParent
